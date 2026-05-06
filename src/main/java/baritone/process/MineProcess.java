@@ -19,7 +19,11 @@ package baritone.process;
 
 import baritone.Baritone;
 import baritone.api.BaritoneAPI;
-import baritone.api.pathing.goals.*;
+import baritone.api.pathing.goals.Goal;
+import baritone.api.pathing.goals.GoalBlock;
+import baritone.api.pathing.goals.GoalComposite;
+import baritone.api.pathing.goals.GoalRunAway;
+import baritone.api.pathing.goals.GoalTwoBlocks;
 import baritone.api.process.IMineProcess;
 import baritone.api.process.PathingCommand;
 import baritone.api.process.PathingCommandType;
@@ -61,6 +65,13 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
     private GoalRunAway branchPointRunaway;
     private int desiredQuantity;
     private int tickCount;
+    private int mineBreakCooldown;
+    private BlockPos mineBreakTarget;
+    private BlockPos currentMineAimTarget;
+    private Rotation currentMineAimRotation;
+    private BlockPos mineRepositionTarget;
+    private BetterBlockPos mineRepositionStart;
+    private int mineRepositionTicks;
 
     public MineProcess(Baritone baritone) {
         super(baritone);
@@ -119,22 +130,49 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
                 .filter(pos -> pos.getY() >= ctx.playerFeet().getY())
                 .filter(pos -> !(BlockStateInterface.get(ctx, pos).getBlock() instanceof AirBlock)) // after breaking a block, it takes mineGoalUpdateInterval ticks for it to actually update this list =(
                 .min(Comparator.comparingDouble(ctx.playerFeet().above()::distSqr));
+        updateMineBreakCooldown();
+        boolean mineWaiting = mineBreakCooldown > 0;
+        if (mineBreakCooldown > 0) {
+            mineBreakCooldown--;
+        }
         baritone.getInputOverrideHandler().clearAllKeys();
+        if (mineRepositionTarget != null) {
+            if (ctx.world().getBlockState(mineRepositionTarget).getBlock() instanceof AirBlock || !mineRepositionStart.equals(ctx.playerFeet()) || mineRepositionTicks++ > 12) {
+                resetMineRepositionTarget();
+            } else {
+                return new PathingCommand(new GoalRunAway(2.5, ctx.playerFeet().y, mineRepositionTarget), PathingCommandType.SET_GOAL_AND_PATH);
+            }
+        }
         if (shaft.isPresent() && ctx.player().onGround()) {
             BlockPos pos = shaft.get();
             BlockState state = baritone.bsi.get0(pos);
             if (!MovementHelper.avoidBreaking(baritone.bsi, pos.getX(), pos.getY(), pos.getZ(), state)) {
                 Optional<Rotation> rot = RotationUtils.reachable(ctx, pos);
                 if (rot.isPresent() && isSafeToCancel) {
-                    baritone.getLookBehavior().updateTarget(rot.get(), true);
+                    updateMineLookTarget(rot.get());
                     MovementHelper.switchToBestToolFor(ctx, ctx.world().getBlockState(pos));
-                    if (ctx.isLookingAt(pos) || ctx.playerRotations().isReallyCloseTo(rot.get())) {
+                    boolean lookingAtMineTarget = ctx.isLookingAt(pos);
+                    if (!mineWaiting && lookingAtMineTarget) {
                         baritone.getInputOverrideHandler().setInputForceState(Input.CLICK_LEFT, true);
+                        mineBreakTarget = pos;
+                    }
+                    if (!lookingAtMineTarget) {
+                        mineRepositionTarget = pos;
+                        mineRepositionStart = ctx.playerFeet();
+                        mineRepositionTicks = 0;
+                        resetMineAimTarget();
+                        return new PathingCommand(new GoalRunAway(2.5, ctx.playerFeet().y, pos), PathingCommandType.SET_GOAL_AND_PATH);
                     }
                     return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
                 }
+                // fallback: reachable() failed but shaft is present, walk away and retry
+                if (!rot.isPresent() && isSafeToCancel) {
+                    // step back to get a better angle
+                    return new PathingCommand(new GoalBlock(ctx.playerFeet().below(3)), PathingCommandType.SET_GOAL_AND_PATH);
+                }
             }
         }
+        resetMineAimTarget();
         PathingCommand command = updateGoal();
         if (command == null) {
             // none in range
@@ -145,6 +183,50 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
         return command;
     }
 
+
+    private void updateMineBreakCooldown() {
+        if (mineBreakTarget == null) {
+            return;
+        }
+        BlockState state = ctx.world().getBlockState(mineBreakTarget);
+        if (state.getBlock() instanceof AirBlock) {
+            mineBreakCooldown = Math.max(mineBreakCooldown, Math.max(0, Baritone.settings().mineBreakDelay.value));
+            mineBreakTarget = null;
+            resetMineAimTarget();
+        }
+    }
+
+    private void updateMineLookTarget(Rotation target) {
+        if (currentMineAimTarget == null || currentMineAimRotation == null || !currentMineAimRotation.isReallyCloseTo(target)) {
+            currentMineAimRotation = target;
+        }
+        baritone.getLookBehavior().updateTarget(smoothMineRotation(target), true, Baritone.settings().mineForceClientLook.value);
+    }
+
+    private void resetMineAimTarget() {
+        currentMineAimTarget = null;
+        currentMineAimRotation = null;
+    }
+
+    private void resetMineRepositionTarget() {
+        mineRepositionTarget = null;
+        mineRepositionStart = null;
+        mineRepositionTicks = 0;
+    }
+
+    private Rotation smoothMineRotation(Rotation target) {
+        float maxYawChange = Baritone.settings().mineMaxYawChange.value;
+        float maxPitchChange = Baritone.settings().mineMaxPitchChange.value;
+        if (maxYawChange < 1.0F && maxPitchChange < 1.0F) {
+            return target;
+        }
+        Rotation current = ctx.playerRotations();
+        float yawDelta = Rotation.normalizeYaw(target.getYaw() - current.getYaw());
+        float pitchDelta = target.getPitch() - current.getPitch();
+        float yawStep = maxYawChange < 1.0F ? yawDelta : Math.max(-maxYawChange, Math.min(maxYawChange, yawDelta));
+        float pitchStep = maxPitchChange < 1.0F ? pitchDelta : Math.max(-maxPitchChange, Math.min(maxPitchChange, pitchDelta));
+        return new Rotation(current.getYaw() + yawStep, current.getPitch() + pitchStep).normalizeAndClamp();
+    }
 
     private void updateLoucaSystem() {
         Map<BlockPos, Long> copy = new HashMap<>(anticipatedDrops);
@@ -166,6 +248,10 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
     @Override
     public void onLostControl() {
         mine(0, (BlockOptionalMetaLookup) null);
+        resetMineAimTarget();
+        resetMineRepositionTarget();
+        mineBreakTarget = null;
+        mineBreakCooldown = 0;
     }
 
     @Override

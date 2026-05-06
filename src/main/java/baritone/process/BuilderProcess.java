@@ -22,6 +22,7 @@ import baritone.api.pathing.goals.Goal;
 import baritone.api.pathing.goals.GoalBlock;
 import baritone.api.pathing.goals.GoalComposite;
 import baritone.api.pathing.goals.GoalGetToBlock;
+import baritone.api.pathing.goals.GoalRunAway;
 import baritone.api.process.IBuilderProcess;
 import baritone.api.process.PathingCommand;
 import baritone.api.process.PathingCommandType;
@@ -79,6 +80,41 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                     TrapDoorBlock.OPEN, TrapDoorBlock.HALF
             );
 
+    /**
+     * Property NAMES (not Property<?> instances, because AGE_1/2/3/5/7/15/25 are different instances that all share
+     * the name "age") that we allow to diverge between current world state and schematic when the block is a known
+     * growing block and {@link baritone.api.Settings#buildIgnoreGrowth} is enabled.
+     */
+    private static final Set<String> GROWTH_PROP_NAMES =
+            ImmutableSet.of("age", "stage", "distance", "persistent", "leaves");
+
+    /**
+     * Blocks whose growth-related properties should be ignored by default. Keeps the builder from breaking cacti,
+     * sugar cane, bamboo, etc. that have grown past the schematic's age=0 state mid-build.
+     */
+    private static final Set<Block> GROWING_BLOCKS = ImmutableSet.<Block>builder()
+            .add(Blocks.CACTUS).add(Blocks.SUGAR_CANE)
+            .add(Blocks.BAMBOO).add(Blocks.BAMBOO_SAPLING)
+            .add(Blocks.KELP).add(Blocks.KELP_PLANT)
+            .add(Blocks.TWISTING_VINES).add(Blocks.TWISTING_VINES_PLANT)
+            .add(Blocks.WEEPING_VINES).add(Blocks.WEEPING_VINES_PLANT)
+            .add(Blocks.SWEET_BERRY_BUSH)
+            .add(Blocks.CHORUS_FLOWER).add(Blocks.CHORUS_PLANT)
+            .add(Blocks.WHEAT).add(Blocks.CARROTS).add(Blocks.POTATOES).add(Blocks.BEETROOTS)
+            .add(Blocks.NETHER_WART)
+            .add(Blocks.TORCHFLOWER_CROP).add(Blocks.PITCHER_CROP)
+            .add(Blocks.COCOA)
+            .add(Blocks.MELON_STEM).add(Blocks.PUMPKIN_STEM)
+            .add(Blocks.ATTACHED_MELON_STEM).add(Blocks.ATTACHED_PUMPKIN_STEM)
+            .add(Blocks.OAK_SAPLING).add(Blocks.SPRUCE_SAPLING).add(Blocks.BIRCH_SAPLING)
+            .add(Blocks.JUNGLE_SAPLING).add(Blocks.ACACIA_SAPLING).add(Blocks.DARK_OAK_SAPLING)
+            .add(Blocks.CHERRY_SAPLING).add(Blocks.MANGROVE_PROPAGULE)
+            .add(Blocks.OAK_LEAVES).add(Blocks.SPRUCE_LEAVES).add(Blocks.BIRCH_LEAVES)
+            .add(Blocks.JUNGLE_LEAVES).add(Blocks.ACACIA_LEAVES).add(Blocks.DARK_OAK_LEAVES)
+            .add(Blocks.CHERRY_LEAVES).add(Blocks.MANGROVE_LEAVES)
+            .add(Blocks.AZALEA_LEAVES).add(Blocks.FLOWERING_AZALEA_LEAVES)
+            .build();
+
     private HashSet<BetterBlockPos> incorrectPositions;
     private LongOpenHashSet observedCompleted; // positions that are completed even if they're out of render distance and we can't make sure right now
     private String name;
@@ -91,6 +127,28 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
     private int numRepeats;
     private List<BlockState> approxPlaceable;
     public int stopAtHeight = 0;
+
+    // --- smooth rotation handling (farm-like) ---
+    private int placeCooldownTicks;
+    private Rotation currentAimTarget;
+    private BetterBlockPos currentBreakTarget;
+    private Rotation currentBreakAimTarget;
+    private BetterBlockPos currentBreakStart;
+    private BetterBlockPos breakRepositionTarget;
+    private BetterBlockPos breakRepositionStart;
+    private int breakRepositionTicks;
+
+    // --- jump-place ---
+    private int jumpPlaceTicksActive;    // >0 while jump-place sequence is in progress
+    private BetterBlockPos jumpPlaceTarget;
+    private double jumpPlaceStartY;
+
+    // --- progress reporting ---
+    private long lastProgressLogMs;
+    private int totalScannedBlocks;
+    private int lastRemainingBlocks;
+    private long progressWindowStartMs;
+    private int progressWindowStartRemaining;
 
     public BuilderProcess(Baritone baritone) {
         super(baritone);
@@ -296,6 +354,32 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         return Optional.empty();
     }
 
+    private Optional<Tuple<BetterBlockPos, Rotation>> selectBreakTarget(BuilderCalculationContext bcc) {
+        if (currentBreakTarget != null) {
+            if (currentBreakStart != null && currentBreakStart.equals(ctx.playerFeet()) && needsBreak(bcc, currentBreakTarget) && currentBreakAimTarget != null) {
+                return Optional.of(new Tuple<>(currentBreakTarget, currentBreakAimTarget));
+            }
+            resetBuilderBreakTarget();
+        }
+        Optional<Tuple<BetterBlockPos, Rotation>> selected = toBreakNearPlayer(bcc);
+        selected.ifPresent(target -> {
+            currentBreakTarget = target.getA();
+            currentBreakAimTarget = target.getB();
+            currentBreakStart = ctx.playerFeet();
+        });
+        return selected;
+    }
+
+    private boolean needsBreak(BuilderCalculationContext bcc, BlockPos pos) {
+        BlockState curr = bcc.bsi.get0(pos);
+        BlockState desired = bcc.getSchematic(pos.getX(), pos.getY(), pos.getZ(), curr);
+        return desired != null
+                && !(curr.getBlock() instanceof AirBlock)
+                && curr.getBlock() != Blocks.WATER
+                && curr.getBlock() != Blocks.LAVA
+                && !valid(curr, desired, false);
+    }
+
     public static class Placement {
 
         private final int hotbarSelection;
@@ -448,10 +532,14 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         } else {
             ticks--;
         }
+        if (placeCooldownTicks > 0) {
+            placeCooldownTicks--;
+        }
         baritone.getInputOverrideHandler().clearAllKeys();
         if (paused) {
             return new PathingCommand(null, PathingCommandType.CANCEL_AND_SET_GOAL);
         }
+        maybeLogBuildProgress();
         if (Baritone.settings().buildInLayers.value) {
             if (realSchematic == null) {
                 realSchematic = schematic;
@@ -531,13 +619,21 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
             trim();
         }
 
-        Optional<Tuple<BetterBlockPos, Rotation>> toBreak = toBreakNearPlayer(bcc);
+        if (breakRepositionTarget != null) {
+            if (!needsBreak(bcc, breakRepositionTarget) || !breakRepositionStart.equals(ctx.playerFeet()) || breakRepositionTicks++ > 12) {
+                resetBuilderBreakTarget();
+            } else {
+                return new PathingCommand(new GoalRunAway(2.5, ctx.playerFeet().y, breakRepositionTarget), PathingCommandType.SET_GOAL_AND_PATH);
+            }
+        }
+
+        Optional<Tuple<BetterBlockPos, Rotation>> toBreak = selectBreakTarget(bcc);
         if (toBreak.isPresent() && isSafeToCancel && ctx.player().onGround()) {
             // we'd like to pause to break this block
             // only change look direction if it's safe (don't want to fuck up an in progress parkour for example
             Rotation rot = toBreak.get().getB();
             BetterBlockPos pos = toBreak.get().getA();
-            baritone.getLookBehavior().updateTarget(rot, true);
+            updateBuilderBreakLookTarget(pos, rot);
             MovementHelper.switchToBestToolFor(ctx, bcc.get(pos));
             if (ctx.player().isCrouching()) {
                 // really horrible bug where a block is visible for breaking while sneaking but not otherwise
@@ -545,20 +641,65 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                 // and is unable since it's unsneaked in the intermediary tick
                 baritone.getInputOverrideHandler().setInputForceState(Input.SNEAK, true);
             }
-            if (ctx.isLookingAt(pos) || ctx.playerRotations().isReallyCloseTo(rot)) {
+            boolean lookingAtBreakTarget = ctx.isLookingAt(pos);
+            if (lookingAtBreakTarget) {
                 baritone.getInputOverrideHandler().setInputForceState(Input.CLICK_LEFT, true);
+            }
+            if (!lookingAtBreakTarget) {
+                breakRepositionTarget = pos;
+                breakRepositionStart = ctx.playerFeet();
+                breakRepositionTicks = 0;
+                return new PathingCommand(new GoalRunAway(2.5, ctx.playerFeet().y, pos), PathingCommandType.SET_GOAL_AND_PATH);
             }
             return new PathingCommand(null, PathingCommandType.CANCEL_AND_SET_GOAL);
         }
+        resetBuilderBreakTarget();
         List<BlockState> desirableOnHotbar = new ArrayList<>();
         Optional<Placement> toPlace = searchForPlacables(bcc, desirableOnHotbar);
-        if (toPlace.isPresent() && isSafeToCancel && ctx.player().onGround() && ticks <= 0) {
-            Rotation rot = toPlace.get().rot;
-            baritone.getLookBehavior().updateTarget(rot, true);
-            ctx.player().getInventory().setSelectedSlot(toPlace.get().hotbarSelection);
+        if (toPlace.isPresent() && isSafeToCancel && ticks <= 0 && placeCooldownTicks <= 0) {
+            Placement plc = toPlace.get();
+            Rotation rot = plc.rot;
+            updateBuilderLookTarget(rot);
+            ctx.player().getInventory().setSelectedSlot(plc.hotbarSelection);
+            // decide jump-place vs ground-place:
+            // - ground-place (normal): placement target whose placeAgainst.y <= player.y; requires onGround()
+            // - jump-place: placement target whose placeAgainst.y == player.y + 1, within horizontal reach, and
+            //               builderJumpPlace is enabled. we press JUMP when on ground, and CLICK_RIGHT at apex.
+            boolean onGround = ctx.player().onGround();
+            boolean wantsJumpPlace = Baritone.settings().builderJumpPlace.value
+                    && plc.placeAgainst.getY() >= ctx.player().blockPosition().getY() + 1
+                    && plc.side == net.minecraft.core.Direction.UP;
+            if (wantsJumpPlace) {
+                if (onGround) {
+                    baritone.getInputOverrideHandler().setInputForceState(Input.JUMP, true);
+                    jumpPlaceTicksActive = Math.max(1, jumpPlaceTicksActive + 1);
+                    if (jumpPlaceTicksActive > Baritone.settings().builderJumpPlaceTimeoutTicks.value) {
+                        // abort jump-place attempt, let it fall back next tick
+                        jumpPlaceTicksActive = 0;
+                    }
+                    return new PathingCommand(null, PathingCommandType.CANCEL_AND_SET_GOAL);
+                }
+                // airborne: look up and try to click at the apex of the jump (velocity.y near 0 and >= start)
+                double vy = ctx.player().getDeltaMovement().y;
+                boolean aimed = (ctx.isLookingAt(plc.placeAgainst) && ((BlockHitResult) ctx.objectMouseOver()).getDirection().equals(plc.side))
+                        || ctx.playerRotations().isReallyCloseTo(rot);
+                if (aimed && vy <= 0.05) {
+                    baritone.getInputOverrideHandler().setInputForceState(Input.CLICK_RIGHT, true);
+                    placeCooldownTicks = Baritone.settings().builderPlaceCooldown.value;
+                    jumpPlaceTicksActive = 0;
+                }
+                return new PathingCommand(null, PathingCommandType.CANCEL_AND_SET_GOAL);
+            }
+            // normal ground placement
+            if (!onGround) {
+                return new PathingCommand(null, PathingCommandType.CANCEL_AND_SET_GOAL);
+            }
             baritone.getInputOverrideHandler().setInputForceState(Input.SNEAK, true);
-            if ((ctx.isLookingAt(toPlace.get().placeAgainst) && ((BlockHitResult) ctx.objectMouseOver()).getDirection().equals(toPlace.get().side)) || ctx.playerRotations().isReallyCloseTo(rot)) {
+            boolean aimed = (ctx.isLookingAt(plc.placeAgainst) && ((BlockHitResult) ctx.objectMouseOver()).getDirection().equals(plc.side))
+                    || ctx.playerRotations().isReallyCloseTo(rot);
+            if (aimed) {
                 baritone.getInputOverrideHandler().setInputForceState(Input.CLICK_RIGHT, true);
+                placeCooldownTicks = Baritone.settings().builderPlaceCooldown.value;
             }
             return new PathingCommand(null, PathingCommandType.CANCEL_AND_SET_GOAL);
         }
@@ -608,19 +749,29 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         return new PathingCommandContext(goal, PathingCommandType.FORCE_REVALIDATE_GOAL_AND_PATH, bcc);
     }
 
+    private int fullRecalcX = 0, fullRecalcY = 0, fullRecalcZ = 0;
+    private boolean fullRecalcInProgress = false;
+
     private boolean recalc(BuilderCalculationContext bcc) {
         if (incorrectPositions == null) {
             incorrectPositions = new HashSet<>();
-            fullRecalc(bcc);
-            if (incorrectPositions.isEmpty()) {
-                return false;
+            fullRecalcInProgress = true;
+            fullRecalcX = fullRecalcY = fullRecalcZ = 0;
+        }
+        if (fullRecalcInProgress) {
+            fullRecalcIncremental(bcc, 5000); // process max 5000 blocks per tick
+            if (!fullRecalcInProgress) {
+                if (incorrectPositions.isEmpty()) {
+                    return false;
+                }
             }
         }
         recalcNearby(bcc);
-        if (incorrectPositions.isEmpty()) {
-            fullRecalc(bcc);
+        if (incorrectPositions.isEmpty() && !fullRecalcInProgress) {
+            fullRecalcInProgress = true;
+            fullRecalcX = fullRecalcY = fullRecalcZ = 0;
         }
-        return !incorrectPositions.isEmpty();
+        return !incorrectPositions.isEmpty() || fullRecalcInProgress;
     }
 
     private void trim() {
@@ -657,42 +808,60 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         }
     }
 
-    private void fullRecalc(BuilderCalculationContext bcc) {
-        incorrectPositions = new HashSet<>();
-        for (int y = 0; y < schematic.heightY(); y++) {
-            for (int z = 0; z < schematic.lengthZ(); z++) {
-                for (int x = 0; x < schematic.widthX(); x++) {
-                    int blockX = x + origin.getX();
-                    int blockY = y + origin.getY();
-                    int blockZ = z + origin.getZ();
+    private void fullRecalcIncremental(BuilderCalculationContext bcc, int maxBlocksPerTick) {
+        int processed = 0;
+        for (; fullRecalcY < schematic.heightY() && processed < maxBlocksPerTick; fullRecalcY++) {
+            for (; fullRecalcZ < schematic.lengthZ() && processed < maxBlocksPerTick; fullRecalcZ++) {
+                for (; fullRecalcX < schematic.widthX() && processed < maxBlocksPerTick; fullRecalcX++) {
+                    int blockX = fullRecalcX + origin.getX();
+                    int blockY = fullRecalcY + origin.getY();
+                    int blockZ = fullRecalcZ + origin.getZ();
                     BlockState current = bcc.bsi.get0(blockX, blockY, blockZ);
-                    if (!schematic.inSchematic(x, y, z, current)) {
+                    if (!schematic.inSchematic(fullRecalcX, fullRecalcY, fullRecalcZ, current)) {
+                        processed++;
                         continue;
                     }
-                    if (bcc.bsi.worldContainsLoadedChunk(blockX, blockZ)) { // check if its in render distance, not if its in cache
-                        // we can directly observe this block, it is in render distance
-                        if (valid(bcc.bsi.get0(blockX, blockY, blockZ), schematic.desiredState(x, y, z, current, this.approxPlaceable), false)) {
+                    if (bcc.bsi.worldContainsLoadedChunk(blockX, blockZ)) {
+                        if (valid(bcc.bsi.get0(blockX, blockY, blockZ), schematic.desiredState(fullRecalcX, fullRecalcY, fullRecalcZ, current, this.approxPlaceable), false)) {
                             observedCompleted.add(BetterBlockPos.longHash(blockX, blockY, blockZ));
                         } else {
                             incorrectPositions.add(new BetterBlockPos(blockX, blockY, blockZ));
                             observedCompleted.remove(BetterBlockPos.longHash(blockX, blockY, blockZ));
                             if (incorrectPositions.size() > Baritone.settings().incorrectSize.value) {
+                                fullRecalcInProgress = false;
                                 return;
                             }
                         }
-                        continue;
-                    }
-                    // this is not in render distance
-                    if (!observedCompleted.contains(BetterBlockPos.longHash(blockX, blockY, blockZ))) {
-                        // and we've never seen this position be correct
-                        // therefore mark as incorrect
-                        incorrectPositions.add(new BetterBlockPos(blockX, blockY, blockZ));
-                        if (incorrectPositions.size() > Baritone.settings().incorrectSize.value) {
-                            return;
+                    } else {
+                        if (!observedCompleted.contains(BetterBlockPos.longHash(blockX, blockY, blockZ))) {
+                            incorrectPositions.add(new BetterBlockPos(blockX, blockY, blockZ));
+                            if (incorrectPositions.size() > Baritone.settings().incorrectSize.value) {
+                                fullRecalcInProgress = false;
+                                return;
+                            }
                         }
                     }
+                    processed++;
+                }
+                if (fullRecalcX >= schematic.widthX()) {
+                    fullRecalcX = 0;
                 }
             }
+            if (fullRecalcZ >= schematic.lengthZ()) {
+                fullRecalcZ = 0;
+            }
+        }
+        if (fullRecalcY >= schematic.heightY()) {
+            fullRecalcInProgress = false;
+        }
+    }
+
+    // Deprecated: use fullRecalcIncremental instead
+    private void fullRecalc(BuilderCalculationContext bcc) {
+        fullRecalcX = fullRecalcY = fullRecalcZ = 0;
+        fullRecalcInProgress = true;
+        while (fullRecalcInProgress) {
+            fullRecalcIncremental(bcc, 10000);
         }
     }
 
@@ -979,6 +1148,114 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         numRepeats = 0;
         paused = false;
         observedCompleted = null;
+        placeCooldownTicks = 0;
+        currentAimTarget = null;
+        resetBuilderBreakTarget();
+        jumpPlaceTicksActive = 0;
+        jumpPlaceTarget = null;
+        jumpPlaceStartY = 0;
+        lastProgressLogMs = 0;
+        totalScannedBlocks = 0;
+        lastRemainingBlocks = 0;
+        progressWindowStartMs = 0;
+        progressWindowStartRemaining = 0;
+    }
+
+    /**
+     * Smoothly steer the builder's head toward {@code target}, honouring {@link baritone.api.Settings#builderMaxYawChange}
+     * and {@link baritone.api.Settings#builderMaxPitchChange} per-tick caps, and update the aim-settle counter so the
+     * place/break code can wait a configurable number of ticks after arrival before clicking.
+     */
+    private void updateBuilderLookTarget(Rotation target) {
+        if (currentAimTarget == null || !currentAimTarget.isReallyCloseTo(target)) {
+            currentAimTarget = target;
+        }
+        Rotation smoothed = smoothBuilderRotation(target);
+        baritone.getLookBehavior().updateTarget(smoothed, true, Baritone.settings().builderForceClientLook.value);
+    }
+
+    private void updateBuilderBreakLookTarget(BetterBlockPos pos, Rotation target) {
+        if (currentBreakTarget == null || !currentBreakTarget.equals(pos) || currentBreakAimTarget == null || !currentBreakAimTarget.isReallyCloseTo(target)) {
+            currentBreakTarget = pos;
+            currentBreakAimTarget = target;
+            currentBreakStart = ctx.playerFeet();
+        }
+        Rotation smoothed = smoothBuilderRotation(target);
+        baritone.getLookBehavior().updateTarget(smoothed, true, Baritone.settings().builderForceClientLook.value);
+    }
+
+    private void resetBuilderBreakTarget() {
+        currentBreakTarget = null;
+        currentBreakAimTarget = null;
+        currentBreakStart = null;
+        breakRepositionTarget = null;
+        breakRepositionStart = null;
+        breakRepositionTicks = 0;
+    }
+
+    private Rotation smoothBuilderRotation(Rotation target) {
+        float maxYawChange = Baritone.settings().builderMaxYawChange.value;
+        float maxPitchChange = Baritone.settings().builderMaxPitchChange.value;
+        if (maxYawChange < 1.0F && maxPitchChange < 1.0F) {
+            return target;
+        }
+        Rotation current = ctx.playerRotations();
+        float yawDelta = Rotation.normalizeYaw(target.getYaw() - current.getYaw());
+        float pitchDelta = target.getPitch() - current.getPitch();
+        float yawStep = maxYawChange < 1.0F ? yawDelta : clampFloat(yawDelta, -maxYawChange, maxYawChange);
+        float pitchStep = maxPitchChange < 1.0F ? pitchDelta : clampFloat(pitchDelta, -maxPitchChange, maxPitchChange);
+        return new Rotation(current.getYaw() + yawStep, current.getPitch() + pitchStep).normalizeAndClamp();
+    }
+
+    private static float clampFloat(float value, float min, float max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    /**
+     * Print a concise progress line to chat every {@link baritone.api.Settings#builderChatProgressIntervalMin} minutes
+     * with completed-blocks count, percentage, and a rough ETA based on an EWMA of the last 60 s placement rate.
+     */
+    private void maybeLogBuildProgress() {
+        if (!Baritone.settings().builderChatProgress.value) {
+            return;
+        }
+        if (schematic == null || incorrectPositions == null) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        long intervalMs = Math.max(1, Baritone.settings().builderChatProgressIntervalMin.value) * 60_000L;
+        if (lastProgressLogMs == 0) {
+            lastProgressLogMs = now;
+            progressWindowStartMs = now;
+            progressWindowStartRemaining = incorrectPositions.size();
+            return;
+        }
+        if (now - lastProgressLogMs < intervalMs) {
+            return;
+        }
+        int total = totalScannedBlocks;
+        if (total <= 0) {
+            // lazy-init on first time we actually have data
+            total = schematic.widthX() * schematic.heightY() * schematic.lengthZ();
+            totalScannedBlocks = total;
+        }
+        int remaining = incorrectPositions.size();
+        int done = Math.max(0, total - remaining);
+        double percent = total > 0 ? (done * 100.0 / total) : 0.0;
+        long elapsedMs = Math.max(1, now - progressWindowStartMs);
+        int deltaBlocks = Math.max(0, progressWindowStartRemaining - remaining);
+        double blocksPerMin = (deltaBlocks / (elapsedMs / 60_000.0));
+        String eta = "?";
+        if (blocksPerMin > 0.1 && remaining > 0) {
+            long minsLeft = (long) Math.ceil(remaining / blocksPerMin);
+            eta = "~" + minsLeft + " min";
+        }
+        logDirect(String.format(
+                "[Builder] Progress: %d/%d blocks (%.1f%%), %s left", done, total, percent, eta));
+        lastProgressLogMs = now;
+        progressWindowStartMs = now;
+        progressWindowStartRemaining = remaining;
+        lastRemainingBlocks = remaining;
     }
 
     @Override
@@ -1034,7 +1311,9 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         }
         boolean ignoreDirection = Baritone.settings().buildIgnoreDirection.value;
         List<String> ignoredProps = Baritone.settings().buildIgnoreProperties.value;
-        if (!ignoreDirection && ignoredProps.isEmpty()) {
+        boolean ignoreGrowth = Baritone.settings().buildIgnoreGrowth.value
+                && GROWING_BLOCKS.contains(first.getBlock());
+        if (!ignoreDirection && !ignoreGrowth && ignoredProps.isEmpty()) {
             return first.equals(second); // early return if no properties are being ignored
         }
         Map<Property<?>, Comparable<?>> map1 = first.getValues();
@@ -1042,6 +1321,7 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         for (Property<?> prop : map1.keySet()) {
             if (map1.get(prop) != map2.get(prop)
                     && !(ignoreDirection && ORIENTATION_PROPS.contains(prop))
+                    && !(ignoreGrowth && GROWTH_PROP_NAMES.contains(prop.getName()))
                     && !ignoredProps.contains(prop.getName())) {
                 return false;
             }

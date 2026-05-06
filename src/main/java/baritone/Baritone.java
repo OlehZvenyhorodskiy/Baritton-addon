@@ -78,6 +78,7 @@ public class Baritone implements IBaritone {
     private final BuilderProcess builderProcess;
     private final ExploreProcess exploreProcess;
     private final FarmProcess farmProcess;
+    private final AutoSellProcess autoSellProcess;
     private final InventoryPauserProcess inventoryPauserProcess;
     private final IElytraProcess elytraProcess;
 
@@ -121,6 +122,7 @@ public class Baritone implements IBaritone {
             this.builderProcess          = this.registerProcess(BuilderProcess::new);
             this.exploreProcess          = this.registerProcess(ExploreProcess::new);
             this.farmProcess             = this.registerProcess(FarmProcess::new);
+            this.autoSellProcess         = this.registerProcess(AutoSellProcess::new);
             this.inventoryPauserProcess  = this.registerProcess(InventoryPauserProcess::new);
             this.elytraProcess           = this.registerProcess(ElytraProcess::create);
             this.registerProcess(BackfillProcess::new);
@@ -204,6 +206,10 @@ public class Baritone implements IBaritone {
     @Override
     public FarmProcess getFarmProcess() {
         return this.farmProcess;
+    }
+
+    public AutoSellProcess getAutoSellProcess() {
+        return this.autoSellProcess;
     }
 
     public InventoryPauserProcess getInventoryPauserProcess() {

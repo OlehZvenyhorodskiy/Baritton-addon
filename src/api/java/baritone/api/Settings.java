@@ -912,10 +912,10 @@ public final class Settings {
     public final Setting<Integer> pathHistoryCutoffAmount = new Setting<>(50);
 
     /**
-     * Rescan for the goal once every 5 ticks.
-     * Set to 0 to disable.
+     * Rescan for ore blocks once every N ticks. Higher = less CPU, more pauses between clusters.
+     * Farm uses 40 ticks (~2 seconds). Default 20 gives a balance.
      */
-    public final Setting<Integer> mineGoalUpdateInterval = new Setting<>(5);
+    public final Setting<Integer> mineGoalUpdateInterval = new Setting<>(20);
 
     /**
      * After finding this many instances of the target block in the cache, it will stop expanding outward the chunk search.
@@ -987,9 +987,115 @@ public final class Settings {
     public final Setting<Boolean> replantNetherWart = new Setting<>(false);
 
     /**
-     * Farming will scan for at most this many blocks.
+     * Farming will scan for at most this many blocks. Bumped from the historic 256 cap because dense farms
+     * (e.g. 200x200 melon patches) can easily contain thousands of harvestable blocks; the previous cap caused
+     * the scanner to stop after the closest few chunks.
      */
-    public final Setting<Integer> farmMaxScanSize = new Setting<>(256);
+    public final Setting<Integer> farmMaxScanSize = new Setting<>(10000);
+
+    /**
+     * How many ticks #farm waits after breaking a crop before starting the next break.
+     */
+    public final Setting<Integer> farmBreakDelay = new Setting<>(6);
+
+    /**
+     * Farm-specific scan interval (in ticks). Defaults to 100 ticks (≈ 5 seconds at 20 TPS) so the bot picks up newly
+     * grown melons/pumpkins/wheat without waiting for the shared {@link #mineGoalUpdateInterval}. Set to 0 to fall
+     * back to {@link #mineGoalUpdateInterval}.
+     */
+    public final Setting<Integer> farmScanIntervalTicks = new Setting<>(100);
+
+    /**
+     * Chunk radius used by #farm when rescanning the area for harvestable blocks. A value of 7 covers a ~112 block
+     * radius around the player / centre (i.e. roughly a 224x224 block area), which comfortably contains a
+     * 100x100 farm. Reduce to 3-4 for smaller farms to save CPU. Ignored when {@link #farmScanBlockRadius} > 0.
+     */
+    public final Setting<Integer> farmScanChunkRadius = new Setting<>(7);
+
+    /**
+     * Block-radius alternative for #farm scanning. When greater than 0 it overrides {@link #farmScanChunkRadius}
+     * and the chunk radius is computed automatically as ceil(blockRadius / 16). The default of 100 covers a
+     * 200x200 block area centred on the player / waypoint.
+     */
+    public final Setting<Integer> farmScanBlockRadius = new Setting<>(100);
+
+    /**
+     * Maximum yaw change per tick while #farm is aiming at a crop. Values under 1 disable the farm-specific clamp.
+     */
+    public final Setting<Float> farmMaxYawChange = new Setting<>(12.0F);
+
+    /**
+     * Maximum pitch change per tick while #farm is aiming at a crop. Values under 1 disable the farm-specific clamp.
+     */
+    public final Setting<Float> farmMaxPitchChange = new Setting<>(8.0F);
+
+    /**
+     * Force #farm block interactions to use visible client-side rotations, even when blockFreeLook is enabled.
+     */
+    public final Setting<Boolean> farmForceClientLook = new Setting<>(true);
+
+    /**
+     * Toggle for the #autosell process. When true, the bot monitors its inventory and, once
+     * {@link #autoSellInventoryThreshold} of the 36 main inventory slots are non-empty, runs the configured
+     * {@link #autoSellCommand} (default {@code /seller}), left-clicks the first slot in the opened menu that
+     * contains a cactus block (the "Фермер" category), then right-clicks the first slot containing a melon
+     * block to sell the entire stack. Pauses any active #farm while the dialog is open and resumes
+     * automatically afterwards.
+     */
+    public final Setting<Boolean> autoSellEnabled = new Setting<>(false);
+
+    /**
+     * Fraction of the 36 main inventory slots (hotbar + main) that must be non-empty for #autosell to trigger.
+     * Default 0.9 ≈ 32 slots. Counted regardless of item type.
+     */
+    public final Setting<Double> autoSellInventoryThreshold = new Setting<>(0.9);
+
+    /**
+     * Slash command to execute (without the leading "/") when #autosell decides to sell.
+     */
+    public final Setting<String> autoSellCommand = new Setting<>("seller");
+
+    /**
+     * How long (ticks) #autosell waits for each shop menu to open before giving up. Default 100 ticks (≈ 5 s).
+     */
+    public final Setting<Integer> autoSellTimeoutTicks = new Setting<>(100);
+
+    /**
+     * How long (ticks) #autosell waits after right-clicking the sell item before closing the menu. Default 20 ticks (1 s).
+     */
+    public final Setting<Integer> autoSellWaitAfterSellTicks = new Setting<>(20);
+
+    /**
+     * Cooldown in ticks between consecutive sell cycles. Prevents spam after a successful sell. Default 40 ticks (2 s).
+     */
+    public final Setting<Integer> autoSellCooldownTicks = new Setting<>(40);
+
+    /**
+     * Maximum number of consecutive failures (timeouts / no menu opened) before #autosell auto-disables itself.
+     */
+    public final Setting<Integer> autoSellMaxFailures = new Setting<>(3);
+
+    /**
+     * Maximum yaw change per tick while #mine is aiming at a block. Lower = smoother/slower.
+     * Farm-like value: 12.0F. Reduce to 8-9 if still getting kicked.
+     */
+    public final Setting<Float> mineMaxYawChange = new Setting<>(12.0F);
+
+    /**
+     * Maximum pitch change per tick while #mine is aiming at a block.
+     * Farm-like value: 8.0F. Reduce to 6-7 if still getting kicked.
+     */
+    public final Setting<Float> mineMaxPitchChange = new Setting<>(8.0F);
+
+    public final Setting<Integer> mineAimTimeoutTicks = new Setting<>(60);
+
+    public final Setting<Boolean> mineForceClientLook = new Setting<>(true);
+
+    /**
+     * How many ticks to wait after breaking a block before swinging at the next one.
+     * 6 ticks = ~300 ms, roughly 3 blocks/second. Lower = faster mining.
+     */
+    public final Setting<Integer> mineBreakDelay = new Setting<>(6);
 
     /**
      * When the cache scan gives less blocks than the maximum threshold (but still above zero), scan the main world too.
@@ -1137,17 +1243,66 @@ public final class Settings {
     public final Setting<Integer> builderTickScanRadius = new Setting<>(5);
 
     /**
+     * If true, the builder ignores "growth" properties (age, stage, distance, persistent, leaves) on a fixed set of
+     * growing blocks (cacti, sugar cane, bamboo, kelp, vines, saplings, crops, cocoa, sweet berries, chorus, leaves).
+     * <p>
+     * Fixes the bug where the bot keeps breaking cacti/sugar cane that grew up during building because the schematic
+     * stored age=0 but the current world state has age=1+.
+     */
+    public final Setting<Boolean> buildIgnoreGrowth = new Setting<>(true);
+
+    /**
+     * Maximum yaw change per tick while the builder is aiming. Lower = smoother/slower.
+     * Farm-like value: 12.0F. Reduce to 8-9 if still getting kicked.
+     */
+    public final Setting<Float> builderMaxYawChange = new Setting<>(12.0F);
+
+    /**
+     * Maximum pitch change per tick while the builder is aiming.
+     * Farm-like value: 8.0F. Reduce to 6-7 if still getting kicked.
+     */
+    public final Setting<Float> builderMaxPitchChange = new Setting<>(8.0F);
+
+    public final Setting<Integer> builderBreakAimTimeoutTicks = new Setting<>(60);
+
+    public final Setting<Boolean> builderForceClientLook = new Setting<>(true);
+
+    /**
+     * Ticks to wait between consecutive block placements.
+     */
+    public final Setting<Integer> builderPlaceCooldown = new Setting<>(6);
+
+    /**
+     * If true, the builder may jump in place and click at the apex of the jump to place a block on top of a column
+     * that is one block above reach (e.g. the top cactus of a cobble-sand-cactus column) instead of scaffolding.
+     */
+    public final Setting<Boolean> builderJumpPlace = new Setting<>(true);
+
+    /**
+     * If the jump-place routine does not complete within this many ticks, abort and fall back to regular placement.
+     */
+    public final Setting<Integer> builderJumpPlaceTimeoutTicks = new Setting<>(40);
+
+    /**
+     * If true, the builder emits a periodic client-side chat/hotbar progress message during schematic builds.
+     */
+    public final Setting<Boolean> builderChatProgress = new Setting<>(true);
+
+    /**
+     * How often (in minutes) to emit builder progress messages.
+     */
+    public final Setting<Integer> builderChatProgressIntervalMin = new Setting<>(2);
+
+    /**
      * While mining, should it also consider dropped items of the correct type as a pathing destination (as well as ore blocks)?
      */
     public final Setting<Boolean> mineScanDroppedItems = new Setting<>(true);
 
     /**
-     * While mining, wait this number of milliseconds after mining an ore to see if it will drop an item
-     * instead of immediately going onto the next one
-     * <p>
-     * Thanks Louca
+     * While mining, wait this number of milliseconds after mining an ore to see if it will drop an item.
+     * Set to 0 to disable (no waiting for drops). Thanks Louca.
      */
-    public final Setting<Long> mineDropLoiterDurationMSThanksLouca = new Setting<>(250L);
+    public final Setting<Long> mineDropLoiterDurationMSThanksLouca = new Setting<>(0L);
 
     /**
      * Trim incorrect positions too far away, helps performance but hurts reliability in very large schematics

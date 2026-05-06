@@ -20,6 +20,7 @@ package baritone.utils;
 import baritone.api.BaritoneAPI;
 import baritone.api.utils.IPlayerContext;
 import baritone.utils.accessor.IPlayerControllerMP;
+import net.minecraft.core.BlockPos;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
@@ -35,6 +36,9 @@ public final class BlockBreakHelper {
     private final IPlayerContext ctx;
     private boolean wasHitting;
     private int breakDelayTimer = 0;
+    private int tickCounter = 0;
+    private int lastBlockBreakTick = -1000; // global cooldown between different blocks
+    private BlockPos lastBreakPos = null;
 
     BlockBreakHelper(IPlayerContext ctx) {
         this.ctx = ctx;
@@ -50,21 +54,32 @@ public final class BlockBreakHelper {
     }
 
     public void tick(boolean isLeftClick) {
+        tickCounter++;
         if (breakDelayTimer > 0) {
             breakDelayTimer--;
             return;
         }
         HitResult trace = ctx.objectMouseOver();
         boolean isBlockTrace = trace != null && trace.getType() == HitResult.Type.BLOCK;
+        BlockPos targetPos = isBlockTrace ? ((BlockHitResult) trace).getBlockPos() : null;
+
+        // global cooldown between different blocks (anti-cheat protection)
+        int globalDelay = BaritoneAPI.getSettings().mineBreakDelay.value;
+        boolean globalCooldownActive = (tickCounter - lastBlockBreakTick) < globalDelay;
 
         if (isLeftClick && isBlockTrace) {
+            // if we're looking at a different block than last break and cooldown hasn't passed, skip
+            if (lastBreakPos != null && !lastBreakPos.equals(targetPos) && globalCooldownActive) {
+                return;
+            }
+
             ctx.playerController().setHittingBlock(wasHitting);
             if (ctx.playerController().hasBrokenBlock()) {
                 ctx.playerController().syncHeldItem();
-                ctx.playerController().clickBlock(((BlockHitResult) trace).getBlockPos(), ((BlockHitResult) trace).getDirection());
+                ctx.playerController().clickBlock(targetPos, ((BlockHitResult) trace).getDirection());
                 ctx.player().swing(InteractionHand.MAIN_HAND);
             } else {
-                if (ctx.playerController().onPlayerDamageBlock(((BlockHitResult) trace).getBlockPos(), ((BlockHitResult) trace).getDirection())) {
+                if (ctx.playerController().onPlayerDamageBlock(targetPos, ((BlockHitResult) trace).getDirection())) {
                     ctx.player().swing(InteractionHand.MAIN_HAND);
                 }
                 if (ctx.playerController().hasBrokenBlock()) { // block broken this tick
@@ -72,6 +87,9 @@ public final class BlockBreakHelper {
                     breakDelayTimer = BaritoneAPI.getSettings().blockBreakSpeed.value - BASE_BREAK_DELAY;
                     // must reset controller's destroy delay to prevent the client from delaying itself unnecessarily
                     ((IPlayerControllerMP) ctx.minecraft().gameMode).setDestroyDelay(0);
+                    // record global cooldown
+                    lastBlockBreakTick = tickCounter;
+                    lastBreakPos = targetPos;
                 }
             }
             // if true, we're breaking a block. if false, we broke the block this tick

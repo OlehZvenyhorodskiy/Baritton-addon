@@ -142,8 +142,29 @@ sourceSets {
     }
 }
 
+[sourceSets.api, sourceSets.schematica_api].each { extraSourceSet ->
+    unimined.minecraft(extraSourceSet) {
+        version rootProject.minecraft_version
+
+        mappings {
+            intermediary()
+            mojmap()
+            parchment("1.21.4", "2025.03.23")
+
+            devFallbackNamespace "official"
+        }
+    }
+}
+
 dependencies {
     testImplementation 'junit:junit:4.13.2'
+
+    def minecraftCompileJar = fileTree("${gradle.gradleUserHomeDir}/caches/unimined/net/minecraft/minecraft/${rootProject.minecraft_version}/intermediary-${rootProject.minecraft_version}-mojmap-${rootProject.minecraft_version}-parchment-2025.03.23") {
+        include "minecraft-${rootProject.minecraft_version}-fabric-merged+fixed-mojmap+official.jar"
+    }
+    compileOnly minecraftCompileJar
+    apiCompileOnly minecraftCompileJar
+    schematica_apiCompileOnly minecraftCompileJar
 }
 
 jar {

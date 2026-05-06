@@ -39,6 +39,10 @@ public interface ILookBehavior extends IBehavior {
      */
     void updateTarget(Rotation rotation, boolean blockInteract);
 
+    default void updateTarget(Rotation rotation, boolean blockInteract, boolean forceClient) {
+        updateTarget(rotation, blockInteract);
+    }
+
     /**
      * The aim processor instance for this {@link ILookBehavior}, which is responsible for applying additional,
      * deterministic transformations to the target rotation set by {@link #updateTarget}.

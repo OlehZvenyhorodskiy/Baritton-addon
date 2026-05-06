@@ -83,7 +83,9 @@ public class FarmCommand extends Command {
                 "Usage:",
                 "> farm - farms every crop it can find.",
                 "> farm <range> - farm crops within range from the starting position.",
-                "> farm <range> <waypoint> - farm crops within range from waypoint."
+                "> farm <range> <waypoint> - farm crops within range from waypoint.",
+                "",
+                "Use farmdelay <ticks> or set farmBreakDelay <ticks> to slow down harvesting."
         );
     }
 }

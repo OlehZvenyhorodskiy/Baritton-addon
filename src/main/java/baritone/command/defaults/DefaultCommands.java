@@ -52,6 +52,8 @@ public final class DefaultCommands {
                 new TunnelCommand(baritone),
                 new RenderCommand(baritone),
                 new FarmCommand(baritone),
+                new CommandAlias(baritone, Arrays.asList("farmdelay", "farmbreakdelay"), "Set the #farm break delay", "set farmBreakDelay"),
+                new AutoSellCommand(baritone),
                 new FollowCommand(baritone),
                 new PickupCommand(baritone),
                 new ExploreFilterCommand(baritone),

@@ -68,6 +68,8 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
 
     private List<BlockPos> locations;
     private int tickCount;
+    private int breakCooldown;
+    private BlockPos currentBreakTarget;
 
     private int range;
     private BlockPos center;
@@ -119,6 +121,8 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
         this.range = range;
         active = true;
         locations = null;
+        breakCooldown = 0;
+        currentBreakTarget = null;
     }
 
     private enum Harvest {
@@ -202,7 +206,11 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
 
     @Override
     public PathingCommand onTick(boolean calcFailed, boolean isSafeToCancel) {
-        if (Baritone.settings().mineGoalUpdateInterval.value != 0 && tickCount++ % Baritone.settings().mineGoalUpdateInterval.value == 0) {
+        // Farm-specific rescan interval: defaults to 40 ticks (≈ 2 s) so the bot picks up freshly grown crops without
+        // waiting for the shared mineGoalUpdateInterval. Set farmScanIntervalTicks=0 to fall back to the mine default.
+        int farmInterval = Baritone.settings().farmScanIntervalTicks.value;
+        int scanInterval = farmInterval > 0 ? farmInterval : Baritone.settings().mineGoalUpdateInterval.value;
+        if (scanInterval != 0 && tickCount++ % scanInterval == 0) {
             ArrayList<Block> scan = new ArrayList<>();
             for (Harvest harvest : Harvest.values()) {
                 scan.add(harvest.block);
@@ -215,10 +223,20 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
                 }
             }
 
-            Baritone.getExecutor().execute(() -> locations = BaritoneAPI.getProvider().getWorldScanner().scanChunkRadius(ctx, scan, Baritone.settings().farmMaxScanSize.value, 10, 10));
+            int blockRadius = Baritone.settings().farmScanBlockRadius.value;
+            int chunkRadius = blockRadius > 0
+                    ? Math.max(1, (blockRadius + 15) / 16) // ceil(blockRadius / 16)
+                    : Math.max(1, Baritone.settings().farmScanChunkRadius.value);
+            Baritone.getExecutor().execute(() -> locations = BaritoneAPI.getProvider().getWorldScanner()
+                    .scanChunkRadius(ctx, scan, Baritone.settings().farmMaxScanSize.value, chunkRadius, chunkRadius));
         }
         if (locations == null) {
             return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
+        }
+        updateBreakCooldown();
+        boolean waitingForBreakCooldown = breakCooldown > 0;
+        if (breakCooldown > 0) {
+            breakCooldown--;
         }
         List<BlockPos> toBreak = new ArrayList<>();
         List<BlockPos> openFarmland = new ArrayList<>();
@@ -275,10 +293,11 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
             }
             Optional<Rotation> rot = RotationUtils.reachable(ctx, pos);
             if (rot.isPresent() && isSafeToCancel) {
-                baritone.getLookBehavior().updateTarget(rot.get(), true);
+                updateFarmLookTarget(rot.get());
                 MovementHelper.switchToBestToolFor(ctx, ctx.world().getBlockState(pos));
-                if (ctx.isLookingAt(pos)) {
+                if (!waitingForBreakCooldown && ctx.isLookingAt(pos)) {
                     baritone.getInputOverrideHandler().setInputForceState(Input.CLICK_LEFT, true);
+                    currentBreakTarget = pos;
                 }
                 return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
             }
@@ -294,8 +313,8 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
             if (rot.isPresent() && isSafeToCancel && baritone.getInventoryBehavior().throwaway(true, soulsand ? this::isNetherWart : this::isPlantable)) {
                 HitResult result = RayTraceUtils.rayTraceTowards(ctx.player(), rot.get(), blockReachDistance);
                 if (result instanceof BlockHitResult && ((BlockHitResult) result).getDirection() == Direction.UP) {
-                    baritone.getLookBehavior().updateTarget(rot.get(), true);
-                    if (ctx.isLookingAt(pos)) {
+                    updateFarmLookTarget(rot.get());
+                    if (isLookingAt(pos, Direction.UP)) {
                         baritone.getInputOverrideHandler().setInputForceState(Input.CLICK_RIGHT, true);
                     }
                     return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
@@ -315,8 +334,8 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
                 if (rot.isPresent() && isSafeToCancel && baritone.getInventoryBehavior().throwaway(true, this::isCocoa)) {
                     HitResult result = RayTraceUtils.rayTraceTowards(ctx.player(), rot.get(), blockReachDistance);
                     if (result instanceof BlockHitResult && ((BlockHitResult) result).getDirection() == dir) {
-                        baritone.getLookBehavior().updateTarget(rot.get(), true);
-                        if (ctx.isLookingAt(pos)) {
+                        updateFarmLookTarget(rot.get());
+                        if (isLookingAt(pos, dir)) {
                             baritone.getInputOverrideHandler().setInputForceState(Input.CLICK_RIGHT, true);
                         }
                         return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
@@ -330,7 +349,7 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
             }
             Optional<Rotation> rot = RotationUtils.reachable(ctx, pos);
             if (rot.isPresent() && isSafeToCancel && baritone.getInventoryBehavior().throwaway(true, this::isBoneMeal)) {
-                baritone.getLookBehavior().updateTarget(rot.get(), true);
+                updateFarmLookTarget(rot.get());
                 if (ctx.isLookingAt(pos)) {
                     baritone.getInputOverrideHandler().setInputForceState(Input.CLICK_RIGHT, true);
                 }
@@ -395,9 +414,55 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
         return new PathingCommand(new GoalComposite(goalz.toArray(new Goal[0])), PathingCommandType.SET_GOAL_AND_PATH);
     }
 
+    private void updateBreakCooldown() {
+        if (currentBreakTarget == null) {
+            return;
+        }
+
+        BlockState state = ctx.world().getBlockState(currentBreakTarget);
+        if (readyForHarvest(ctx.world(), currentBreakTarget, state)) {
+            return;
+        }
+
+        breakCooldown = Math.max(breakCooldown, Math.max(0, Baritone.settings().farmBreakDelay.value));
+        currentBreakTarget = null;
+    }
+
+    private void updateFarmLookTarget(Rotation target) {
+        baritone.getLookBehavior().updateTarget(smoothFarmRotation(target), true, Baritone.settings().farmForceClientLook.value);
+    }
+
+    private Rotation smoothFarmRotation(Rotation target) {
+        float maxYawChange = Baritone.settings().farmMaxYawChange.value;
+        float maxPitchChange = Baritone.settings().farmMaxPitchChange.value;
+        if (maxYawChange < 1.0F && maxPitchChange < 1.0F) {
+            return target;
+        }
+
+        Rotation current = ctx.playerRotations();
+        float yawDelta = Rotation.normalizeYaw(target.getYaw() - current.getYaw());
+        float pitchDelta = target.getPitch() - current.getPitch();
+        float yawStep = maxYawChange < 1.0F ? yawDelta : clamp(yawDelta, -maxYawChange, maxYawChange);
+        float pitchStep = maxPitchChange < 1.0F ? pitchDelta : clamp(pitchDelta, -maxPitchChange, maxPitchChange);
+        return new Rotation(current.getYaw() + yawStep, current.getPitch() + pitchStep).normalizeAndClamp();
+    }
+
+    private boolean isLookingAt(BlockPos pos, Direction direction) {
+        HitResult result = ctx.objectMouseOver();
+        return result instanceof BlockHitResult
+                && ((BlockHitResult) result).getBlockPos().equals(pos)
+                && ((BlockHitResult) result).getDirection() == direction;
+    }
+
+    private float clamp(float value, float min, float max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
     @Override
     public void onLostControl() {
         active = false;
+        breakCooldown = 0;
+        currentBreakTarget = null;
     }
 
     @Override

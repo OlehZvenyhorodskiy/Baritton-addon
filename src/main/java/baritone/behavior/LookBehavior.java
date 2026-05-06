@@ -65,7 +65,12 @@ public final class LookBehavior extends Behavior implements ILookBehavior {
 
     @Override
     public void updateTarget(Rotation rotation, boolean blockInteract) {
-        this.target = new Target(rotation, Target.Mode.resolve(ctx, blockInteract));
+        updateTarget(rotation, blockInteract, false);
+    }
+
+    @Override
+    public void updateTarget(Rotation rotation, boolean blockInteract, boolean forceClient) {
+        this.target = new Target(rotation, Target.Mode.resolve(ctx, blockInteract, forceClient));
     }
 
     @Override
@@ -334,19 +339,23 @@ public final class LookBehavior extends Behavior implements ILookBehavior {
             NONE;
 
             static Mode resolve(IPlayerContext ctx, boolean blockInteract) {
+                return resolve(ctx, blockInteract, false);
+            }
+
+            static Mode resolve(IPlayerContext ctx, boolean blockInteract, boolean forceClient) {
                 final Settings settings = Baritone.settings();
                 final boolean antiCheat = settings.antiCheatCompatibility.value;
                 final boolean blockFreeLook = settings.blockFreeLook.value;
 
                 if (ctx.player().isFallFlying()) {
                     // always need to set angles while flying
-                    return settings.elytraFreeLook.value ? SERVER : CLIENT;
+                    return settings.elytraFreeLook.value && !forceClient ? SERVER : CLIENT;
                 } else if (settings.freeLook.value) {
                     // Regardless of if antiCheatCompatibility is enabled, if a blockInteract is requested then the player
                     // rotation needs to be set somehow, otherwise Baritone will halt since objectMouseOver() will just be
                     // whatever the player is mousing over visually. Let's just settle for setting it silently.
                     if (blockInteract) {
-                        return blockFreeLook ? SERVER : CLIENT;
+                        return blockFreeLook && !forceClient ? SERVER : CLIENT;
                     }
                     return antiCheat ? SERVER : NONE;
                 }
