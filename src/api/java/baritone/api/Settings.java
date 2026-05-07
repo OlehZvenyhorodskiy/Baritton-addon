@@ -1035,20 +1035,60 @@ public final class Settings {
     public final Setting<Boolean> farmForceClientLook = new Setting<>(true);
 
     /**
-     * Toggle for the #autosell process. When true, the bot monitors its inventory and, once
-     * {@link #autoSellInventoryThreshold} of the 36 main inventory slots are non-empty, runs the configured
-     * {@link #autoSellCommand} (default {@code /seller}), left-clicks the first slot in the opened menu that
-     * contains a cactus block (the "Фермер" category), then right-clicks the first slot containing a melon
-     * block to sell the entire stack. Pauses any active #farm while the dialog is open and resumes
-     * automatically afterwards.
+     * Anti-cheat throttle for #farm right-click actions (replanting seeds, placing nether wart / cocoa, applying
+     * bonemeal). Minimum ticks between consecutive right-click attempts. Some servers kick or flag players for
+     * placing blocks too rapidly. Default 4 ticks (≈ 5 placements per second). Set to 0 to disable throttling.
+     */
+    public final Setting<Integer> farmRightClickDelay = new Setting<>(4);
+
+    /**
+     * If true, while #farm is running and in control, the bot alternately runs the {@code /feed} and {@code /heal}
+     * slash commands every {@link #farmAutoFeedHealIntervalTicks} ticks. Sequence: at t=interval -> /feed, at
+     * t=2*interval -> /heal, at t=3*interval -> /feed, and so on. The timer pauses while #autosell is selling and
+     * resets when #farm starts a new session.
+     */
+    public final Setting<Boolean> farmAutoFeedHealEnabled = new Setting<>(true);
+
+    /**
+     * Tick interval between consecutive auto-feed/heal commands (see {@link #farmAutoFeedHealEnabled}).
+     * Default 3600 ticks = 3 minutes at 20 TPS. Set to 0 to disable (equivalent to turning the feature off).
+     */
+    public final Setting<Integer> farmAutoFeedHealIntervalTicks = new Setting<>(3600);
+
+    /**
+     * Toggle for the #autosell process. When true, the bot monitors its inventory and, once at least
+     * {@link #autoSellTriggerSlots} slots in the main inventory contain pumpkin blocks, the bot pauses #farm,
+     * crafts all pumpkins into pumpkin seeds via the player's 2x2 crafting grid (vanilla recipe: 1 pumpkin → 4
+     * seeds), runs the configured {@link #autoSellCommand} (default {@code /seller}), left-clicks the first slot
+     * containing a cactus block (the "Фермер" category), then right-clicks the first slot containing pumpkin
+     * seeds to sell the entire stack. Pumpkin seeds are then cleared from inventory; #farm resumes automatically.
      */
     public final Setting<Boolean> autoSellEnabled = new Setting<>(false);
 
     /**
-     * Fraction of the 36 main inventory slots (hotbar + main) that must be non-empty for #autosell to trigger.
-     * Default 0.9 ≈ 32 slots. Counted regardless of item type.
+     * Number of inventory slots containing pumpkin blocks required to trigger #autosell. Default 8 (≈ 1/4 of the
+     * 36 main inventory slots). Counted on slots 9..44 of the player's inventory menu (main inv + hotbar).
      */
-    public final Setting<Double> autoSellInventoryThreshold = new Setting<>(0.9);
+    public final Setting<Integer> autoSellTriggerSlots = new Setting<>(8);
+
+    /**
+     * Whether #autosell crafts pumpkins into pumpkin seeds before opening the seller menu. Disable to sell raw
+     * pumpkin blocks instead (you would also need to change the in-shop sell item — see AutoSellProcess.SELL_ITEM).
+     */
+    public final Setting<Boolean> autoSellCraftPumpkins = new Setting<>(true);
+
+    /**
+     * Tick delay between consecutive shift-clicks on the crafting result slot during the crafting phase.
+     * Lower = faster crafting but more packets/sec (anti-cheat risk). Default 2 ticks ≈ 10 crafts/sec.
+     */
+    public final Setting<Integer> autoSellCraftClickDelay = new Setting<>(2);
+
+    /**
+     * Maximum number of shift-click attempts during one crafting batch before the process gives up and aborts
+     * the cycle. Acts as a safety stop in case the recipe doesn't actually exist on the server.
+     * 9 stacks × 64 pumpkins × 2 clicks of slack = ~1200; default 2000 leaves comfortable headroom.
+     */
+    public final Setting<Integer> autoSellCraftMaxClicks = new Setting<>(2000);
 
     /**
      * Slash command to execute (without the leading "/") when #autosell decides to sell.

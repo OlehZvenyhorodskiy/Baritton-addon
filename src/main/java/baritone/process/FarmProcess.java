@@ -33,6 +33,7 @@ import baritone.api.utils.RotationUtils;
 import baritone.api.utils.input.Input;
 import baritone.pathing.movement.MovementHelper;
 import baritone.utils.BaritoneProcessHelper;
+import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.entity.Entity;
@@ -70,6 +71,16 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
     private int tickCount;
     private int breakCooldown;
     private BlockPos currentBreakTarget;
+
+    /** Per-tick counter used by the right-click throttle. Incremented at the start of onTick(). */
+    private int rightClickTickCounter;
+    /** Tick value of the most recent right-click action. Used with farmRightClickDelay. */
+    private int lastRightClickTick = Integer.MIN_VALUE / 2;
+
+    /** Tick at which the last /feed or /heal command was sent, in units of {@link #rightClickTickCounter}. */
+    private int lastFeedHealTick;
+    /** True if the next auto-feed/heal command should be {@code /feed}; otherwise {@code /heal}. */
+    private boolean nextFeedHealIsFeed = true;
 
     private int range;
     private BlockPos center;
@@ -123,6 +134,9 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
         locations = null;
         breakCooldown = 0;
         currentBreakTarget = null;
+        // reset the auto-feed/heal cycle so a fresh #farm starts at /feed in `interval` ticks
+        lastFeedHealTick = rightClickTickCounter;
+        nextFeedHealIsFeed = true;
     }
 
     private enum Harvest {
@@ -206,6 +220,8 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
 
     @Override
     public PathingCommand onTick(boolean calcFailed, boolean isSafeToCancel) {
+        rightClickTickCounter++;
+        tickAutoFeedHeal();
         // Farm-specific rescan interval: defaults to 40 ticks (≈ 2 s) so the bot picks up freshly grown crops without
         // waiting for the shared mineGoalUpdateInterval. Set farmScanIntervalTicks=0 to fall back to the mine default.
         int farmInterval = Baritone.settings().farmScanIntervalTicks.value;
@@ -314,8 +330,9 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
                 HitResult result = RayTraceUtils.rayTraceTowards(ctx.player(), rot.get(), blockReachDistance);
                 if (result instanceof BlockHitResult && ((BlockHitResult) result).getDirection() == Direction.UP) {
                     updateFarmLookTarget(rot.get());
-                    if (isLookingAt(pos, Direction.UP)) {
+                    if (isLookingAt(pos, Direction.UP) && canRightClick()) {
                         baritone.getInputOverrideHandler().setInputForceState(Input.CLICK_RIGHT, true);
+                        markRightClick();
                     }
                     return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
                 }
@@ -335,8 +352,9 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
                     HitResult result = RayTraceUtils.rayTraceTowards(ctx.player(), rot.get(), blockReachDistance);
                     if (result instanceof BlockHitResult && ((BlockHitResult) result).getDirection() == dir) {
                         updateFarmLookTarget(rot.get());
-                        if (isLookingAt(pos, dir)) {
+                        if (isLookingAt(pos, dir) && canRightClick()) {
                             baritone.getInputOverrideHandler().setInputForceState(Input.CLICK_RIGHT, true);
+                            markRightClick();
                         }
                         return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
                     }
@@ -350,8 +368,9 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
             Optional<Rotation> rot = RotationUtils.reachable(ctx, pos);
             if (rot.isPresent() && isSafeToCancel && baritone.getInventoryBehavior().throwaway(true, this::isBoneMeal)) {
                 updateFarmLookTarget(rot.get());
-                if (ctx.isLookingAt(pos)) {
+                if (ctx.isLookingAt(pos) && canRightClick()) {
                     baritone.getInputOverrideHandler().setInputForceState(Input.CLICK_RIGHT, true);
+                    markRightClick();
                 }
                 return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
             }
@@ -412,6 +431,42 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
             return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
         }
         return new PathingCommand(new GoalComposite(goalz.toArray(new Goal[0])), PathingCommandType.SET_GOAL_AND_PATH);
+    }
+
+    private boolean canRightClick() {
+        int delay = Math.max(0, Baritone.settings().farmRightClickDelay.value);
+        return rightClickTickCounter - lastRightClickTick >= delay;
+    }
+
+    private void markRightClick() {
+        lastRightClickTick = rightClickTickCounter;
+    }
+
+    /**
+     * Sends {@code /feed} and {@code /heal} alternately while the bot is farming. Cadence is controlled by
+     * {@link baritone.api.Settings#farmAutoFeedHealIntervalTicks}; default is 3 minutes (3600 ticks). The first
+     * command goes out at {@code start + interval} (i.e. 3 minutes after #farm starts), then alternates.
+     */
+    private void tickAutoFeedHeal() {
+        if (!Baritone.settings().farmAutoFeedHealEnabled.value) {
+            return;
+        }
+        int interval = Baritone.settings().farmAutoFeedHealIntervalTicks.value;
+        if (interval <= 0) {
+            return;
+        }
+        if (rightClickTickCounter - lastFeedHealTick < interval) {
+            return;
+        }
+        LocalPlayer player = ctx.player();
+        if (player == null || player.connection == null) {
+            return;
+        }
+        String cmd = nextFeedHealIsFeed ? "feed" : "heal";
+        player.connection.sendCommand(cmd);
+        logDirect("AutoFeedHeal: /" + cmd);
+        nextFeedHealIsFeed = !nextFeedHealIsFeed;
+        lastFeedHealTick = rightClickTickCounter;
     }
 
     private void updateBreakCooldown() {

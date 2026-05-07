@@ -76,7 +76,8 @@ public class AutoSellCommand extends Command {
             case "status":
                 logDirect("AutoSell is "
                         + (Baritone.settings().autoSellEnabled.value ? "ENABLED" : "DISABLED")
-                        + " (threshold=" + Baritone.settings().autoSellInventoryThreshold.value
+                        + " (triggerSlots=" + Baritone.settings().autoSellTriggerSlots.value
+                        + ", craft=" + Baritone.settings().autoSellCraftPumpkins.value
                         + ", command=/" + Baritone.settings().autoSellCommand.value + ")");
                 break;
             default:
@@ -104,10 +105,11 @@ public class AutoSellCommand extends Command {
     public List<String> getLongDesc() {
         return Arrays.asList(
                 "When enabled, AutoSell monitors the bot's main inventory while #farm runs.",
-                "Once at least autoSellInventoryThreshold (default 90%) of the 36 main slots are non-empty,",
-                "the bot pauses farming, runs the configured slash command (default /seller), clicks the",
-                "category slot containing a cactus block (the 'Фермер' category), then right-clicks the slot",
-                "containing a melon block to sell the entire stack. Once the menu is closed, farming resumes.",
+                "Once at least autoSellTriggerSlots (default 8 ≈ 1/4 of inventory) main inventory slots",
+                "contain pumpkin blocks, the bot pauses farming, crafts every pumpkin into 4 pumpkin seeds",
+                "via the player's 2x2 crafting grid (autoSellCraftPumpkins=true), runs the configured slash",
+                "command (default /seller), clicks the cactus category slot ('Фермер'), then right-clicks the",
+                "pumpkin seed slot to sell everything. Closes the menu and resumes farming automatically.",
                 "",
                 "Usage:",
                 "> autosell           - toggle on/off",
@@ -115,8 +117,9 @@ public class AutoSellCommand extends Command {
                 "> autosell now       - immediately trigger a sell cycle (also enables autosell)",
                 "> autosell status    - print current state",
                 "",
-                "Related settings: autoSellEnabled, autoSellInventoryThreshold, autoSellCommand,",
-                "autoSellTimeoutTicks, autoSellWaitAfterSellTicks, autoSellCooldownTicks, autoSellMaxFailures."
+                "Related settings: autoSellEnabled, autoSellTriggerSlots, autoSellCraftPumpkins,",
+                "autoSellCraftClickDelay, autoSellCraftMaxClicks, autoSellCommand, autoSellTimeoutTicks,",
+                "autoSellWaitAfterSellTicks, autoSellCooldownTicks, autoSellMaxFailures."
         );
     }
 }
