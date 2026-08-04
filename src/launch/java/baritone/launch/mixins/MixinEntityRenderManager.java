@@ -24,7 +24,6 @@ import org.spongepowered.asm.mixin.Mixin;
 @Mixin(EntityRenderDispatcher.class)
 public class MixinEntityRenderManager implements IEntityRenderManager {
 
-
     @Override
     public double renderPosX() {
         return ((EntityRenderDispatcher) (Object) this).camera.getPosition().x;

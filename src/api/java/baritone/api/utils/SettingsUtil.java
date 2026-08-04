@@ -56,7 +56,6 @@ public class SettingsUtil {
     public static final String SETTINGS_DEFAULT_NAME = "settings.txt";
     private static final Pattern SETTING_PATTERN = Pattern.compile("^(?<setting>[^ ]+) +(?<value>.+)"); // key and value split by the first space
 
-
     private static boolean isComment(String line) {
         return line.startsWith("#") || line.startsWith("//");
     }

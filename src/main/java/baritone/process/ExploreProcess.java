@@ -126,9 +126,7 @@ public final class ExploreProcess extends BaritoneProcessHelper implements IExpl
                         case UNKNOWN:
                             return null; // awaiting load
                         case NOT_EXPLORED:
-                            break; // note: this breaks the switch not the for
                         case EXPLORED:
-                            continue; // note: this continues the for
                         default:
                     }
                     int centerX = ((chunkX + dx) << 4) + 8;

@@ -183,7 +183,6 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
         return command;
     }
 
-
     private void updateMineBreakCooldown() {
         if (mineBreakTarget == null) {
             return;
@@ -486,7 +485,6 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
         BlockPos playerFeet = ctx.playerFeet();
         BlockStateInterface bsi = new BlockStateInterface(ctx);
 
-
         BlockOptionalMetaLookup filter = filterFilter();
         if (filter == null) {
             return false;
@@ -568,7 +566,6 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
         }
         return false;
     }
-
 
     public static boolean plausibleToBreak(CalculationContext ctx, BlockPos pos) {
         BlockState state = ctx.bsi.get0(pos);

@@ -165,7 +165,6 @@ public class SelCommand extends Command {
                 Vec3i size = selection.size();
                 BetterBlockPos min = selection.min();
 
-                // Java 8 so no switch expressions 😿
                 UnaryOperator<ISchematic> create = fill -> {
                     final int w = fill.widthX();
                     final int h = fill.heightY();

@@ -177,7 +177,6 @@ public class PathingControlManager implements IPathingControlManager {
         return false;
     }
 
-
     public PathingCommand executeProcesses() {
         for (IBaritoneProcess process : processes) {
             if (process.isActive()) {

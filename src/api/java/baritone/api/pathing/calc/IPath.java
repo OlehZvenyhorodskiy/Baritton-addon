@@ -143,7 +143,6 @@ public interface IPath {
         throw new UnsupportedOperationException();
     }
 
-
     /**
      * Performs a series of checks to ensure that the assembly of the path went as expected.
      */

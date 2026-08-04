@@ -63,7 +63,6 @@ public interface ActionCosts {
      */
     double JUMP_ONE_BLOCK_COST = FALL_1_25_BLOCKS_COST - FALL_0_25_BLOCKS_COST;
 
-
     static double[] generateFallNBlocksCost() {
         double[] costs = new double[4097];
         for (int i = 0; i < 4097; i++) {

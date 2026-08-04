@@ -31,7 +31,6 @@ import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.BlockHitResult;
 
-
 /**
  * Implementation of {@link IPlayerController} that chains to the primary player controller's methods
  *

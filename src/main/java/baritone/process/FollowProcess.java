@@ -73,7 +73,6 @@ public final class FollowProcess extends BaritoneProcessHelper implements IFollo
         return new GoalNear(pos, Baritone.settings().followRadius.value);
     }
 
-
     private boolean followable(Entity entity) {
         if (entity == null) {
             return false;

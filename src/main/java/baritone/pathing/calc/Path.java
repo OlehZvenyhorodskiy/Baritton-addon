@@ -166,7 +166,6 @@ class Path extends PathBase {
     @Override
     public List<IMovement> movements() {
         if (!verified) {
-            // edge case note: this is called during verification
             throw new IllegalStateException("Path not yet verified");
         }
         return Collections.unmodifiableList(movements);

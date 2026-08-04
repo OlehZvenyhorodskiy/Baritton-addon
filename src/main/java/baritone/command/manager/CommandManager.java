@@ -36,7 +36,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.stream.Stream;
 
-
 /**
  * The default, internal implementation of {@link ICommandManager}
  *

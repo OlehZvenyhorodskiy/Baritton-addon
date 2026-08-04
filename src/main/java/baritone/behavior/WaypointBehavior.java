@@ -39,7 +39,6 @@ import static baritone.api.command.IBaritoneChatControl.FORCE_COMMAND_PREFIX;
 
 public class WaypointBehavior extends Behavior {
 
-
     public WaypointBehavior(Baritone baritone) {
         super(baritone);
     }

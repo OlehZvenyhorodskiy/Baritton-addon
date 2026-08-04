@@ -22,7 +22,6 @@ import baritone.api.utils.SettingsUtil;
 import baritone.api.utils.interfaces.IGoalRenderPos;
 import net.minecraft.core.BlockPos;
 
-
 /**
  * Don't get into the block, but get directly adjacent to it. Useful for chests.
  *

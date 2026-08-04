@@ -490,7 +490,6 @@ public final class AutoSellProcess extends BaritoneProcessHelper {
 
     /**
      * If crafting is disabled the bot sells raw pumpkins; otherwise it sells the crafted pumpkin seeds.
-     * Note: when crafting is enabled and the recipe doesn't work the cycle aborts via {@link #failure}, so
      * we never reach this method with leftover pumpkins to sell.
      */
     private Item effectiveSellItem() {

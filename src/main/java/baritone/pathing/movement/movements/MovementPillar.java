@@ -243,7 +243,6 @@ public class MovementPillar extends Movement {
                 state.setInput(Input.JUMP, ctx.player().position().y < dest.getY());
             }
 
-
             if (!blockIsThere) {
                 BlockState frState = BlockStateInterface.get(ctx, src);
                 Block fr = frState.getBlock();

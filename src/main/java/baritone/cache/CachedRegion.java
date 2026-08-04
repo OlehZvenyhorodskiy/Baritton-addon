@@ -111,7 +111,6 @@ public final class CachedRegion implements ICachedRegion {
         hasUnsavedChanges = true;
     }
 
-
     public synchronized final void save(String directory) {
         if (!hasUnsavedChanges) {
             return;

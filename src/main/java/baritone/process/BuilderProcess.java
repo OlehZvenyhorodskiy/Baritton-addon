@@ -944,7 +944,6 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
             this.fallback = fallback;
         }
 
-
         @Override
         public boolean isInGoal(int x, int y, int z) {
             return primary.isInGoal(x, y, z) || fallback.isInGoal(x, y, z);
@@ -1409,7 +1408,6 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                 }
                 if (placeable.contains(sch)) {
                     return 0; // thats right we gonna make it FREE to place a block where it should go in a structure
-                    // no place block penalty at all 😎
                     // i'm such an idiot that i just tried to copy and paste the epic gamer moment emoji too
                     // get added to unicode when?
                 }

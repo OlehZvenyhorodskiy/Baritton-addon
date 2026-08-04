@@ -15,7 +15,6 @@
  * along with Baritone.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-
 package baritone.process.elytra;
 
 /**

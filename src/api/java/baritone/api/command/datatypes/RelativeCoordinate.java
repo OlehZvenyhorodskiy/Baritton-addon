@@ -51,7 +51,6 @@ public enum RelativeCoordinate implements IDatatypePost<Double, Double> {
             offset *= 1000000;
         }
 
-
         if (isRelative) {
             return origin + offset;
         }

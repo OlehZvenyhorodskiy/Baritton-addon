@@ -157,7 +157,6 @@ public final class Settings {
      * Allow Baritone to assume it can walk on still water just like any other block.
      * This functionality is assumed to be provided by a separate library that might have imported Baritone.
      * <p>
-     * Note: This will prevent some usage of the frostwalker enchantment, like pillaring up from water.
      */
     public final Setting<Boolean> assumeWalkOnWater = new Setting<>(false);
 
@@ -567,7 +566,6 @@ public final class Settings {
      * The player overshoots the landing, but not enough to fall off. And the diagonal ensures that there isn't
      * lava or anything that's !canWalkInto in that space, so it's technically safe, just a little sketchy.
      * <p>
-     * Note: this is *not* related to the allowDiagonalDescend setting, that is a completely different thing.
      */
     public final Setting<Boolean> allowOvershootDiagonalDescend = new Setting<>(true);
 
@@ -628,7 +626,6 @@ public final class Settings {
      * The alternative timeout number when slowPath is on
      */
     public final Setting<Long> slowPathTimeoutMS = new Setting<>(40000L);
-
 
     /**
      * allows baritone to save bed waypoints when interacting with beds
@@ -817,7 +814,6 @@ public final class Settings {
     public final Setting<Boolean> blacklistClosestOnFailure = new Setting<>(true);
 
     /**
-     * 😎 Render cached chunks as semitransparent. Doesn't work with OptiFine 😭 Rarely randomly crashes, see <a href="https://github.com/cabaletta/baritone/issues/327">this issue</a>.
      * <p>
      * Can be very useful on servers with low render distance. After enabling, you may need to reload the world in order for it to have an effect
      * (e.g. disconnect and reconnect, enter then exit the nether, die and respawn, etc). This may literally kill your FPS and CPU because

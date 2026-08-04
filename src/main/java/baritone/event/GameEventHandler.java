@@ -105,7 +105,6 @@ public final class GameEventHandler implements IEventBus, Helper {
             });
         }
 
-
         listeners.forEach(l -> l.onChunkEvent(event));
     }
 

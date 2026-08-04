@@ -55,7 +55,6 @@ public interface IPlayerContext {
         return StreamSupport.stream(entities().spliterator(), false);
     }
 
-
     IWorldData worldData();
 
     HitResult objectMouseOver();

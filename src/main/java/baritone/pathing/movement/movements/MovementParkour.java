@@ -218,7 +218,6 @@ public class MovementParkour extends Movement {
         }
     }
 
-
     @Override
     public double calculateCost(CalculationContext context) {
         MutableMoveResult res = new MutableMoveResult();
